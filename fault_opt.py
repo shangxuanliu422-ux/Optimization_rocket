@@ -37,7 +37,7 @@ class FaultOptimizeConfig:
 	dt: float = 1.0
 	fault_mode: int = 2 # 0: 无故障, 1: 推力下降时长不变, 2: 推力+秒耗下降且一级延时
 	te: float = 155.0
-	kappa: float = 0.103
+	kappa: float = 0.11
 
 	dphi_max_deg_per_step: float = 0.8
 	w_ctrl: float = 10.0
