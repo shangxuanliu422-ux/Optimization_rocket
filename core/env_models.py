@@ -129,7 +129,7 @@ class EarthEnv:
             dtype=float,
         )
 
-        # 发射点在地心坐标系下位置
+        # 发惯系下，地心到发射点的矢量
         mu0 = np.deg2rad(self.B_0 - self.phi_0)
         self.R_fashe = np.array(
             [
