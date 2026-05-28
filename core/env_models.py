@@ -35,8 +35,8 @@ class EarthEnv:
         self.number2 = 2
         self.mdot1_per_engine = 500.0
         self.mdot2_per_engine = 405.0
-        self.Isp1 = 3800.0
-        self.Isp2 = 3800.0
+        self.c_eff1 = 3800.0 # 一级发动机有效排气速度（m/s），与秒耗量一起决定推力
+        self.c_eff2 = 3800.0
         self.t_yiji = 200.0
         self.t_zhengliu = 7.0
         self.m01 = 1560000.0
@@ -67,8 +67,8 @@ class EarthEnv:
         # 一级/二级推力与秒耗量
         self.mdot1 = self.mdot1_per_engine * self.number1
         self.mdot2 = self.mdot2_per_engine * self.number2
-        self.P1 = self.mdot1 * self.Isp1
-        self.P2 = self.mdot2 * self.Isp2
+        self.P1 = self.mdot1 * self.c_eff1
+        self.P2 = self.mdot2 * self.c_eff2
 
         # 地球参数与发射点地心纬度
         self.e2 = (self.a0**2 - self.b0**2) / self.a0**2
@@ -360,7 +360,7 @@ class EarthEnv:
             "target": dict(self.target),
             "number1": self.number1,
             "mdot1": self.mdot1,
-            "Isp1": self.Isp1,
+            "c_eff1": self.c_eff1,
             "P1": self.P1,
             "E": self.E,
             "B_0": self.B_0,
@@ -375,7 +375,7 @@ class EarthEnv:
             "m_gan": self.m_gan,
             "number2": self.number2,
             "mdot2": self.mdot2,
-            "Isp2": self.Isp2,
+            "c_eff2": self.c_eff2,
             "P2": self.P2,
             "t_zhengliu": self.t_zhengliu,
             "m_zhengliu": self.m_zhengliu,
