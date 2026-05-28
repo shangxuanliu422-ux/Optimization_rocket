@@ -92,3 +92,27 @@ inspect_npz.py 是一个查看 npz 数据结构的工具。它可以打印文件
 
 ## 2026.04.26新增
 - 新增new_kedaxing: 在原可达性基础上删掉了目标里的平滑项，仅仅优化kappa，这样得到的才是硬边界，才能和fault_opt里的情况对应起来，这样的可达域会变大一点点。新的npz和图像存为了kedaxing111，可在result中查看，以后写论文的时候，把其他几个也跑一下，尽量避免平滑项的干扰。
+
+## 2026.05.28 新增说明
+
+- `results/biaozhundandao_new.npz` 是在当前标准工况设置下新生成的标准入轨优化结果。它和旧的 `results/biaozhundandao.npz` 使用相同任务条件，但不是逐点完全相同的轨迹；旧文件可作为初始猜测，新文件是重新优化后的另一个可行解。由于该问题是非线性最优控制问题，且末端轨道约束允许有限容差，不同初猜、平滑权重、约束开关或求解器收敛路径都可能得到略有差别但同样满足约束的局部解。
+- 新旧标准结果对比时，重点看末端六根数是否满足容差、T4 时长、控制角是否贴边界、轨迹回放误差是否可接受，而不是要求 `X/U` 数组逐点一致。
+- 角度周期误差的处理方式已从 `ca.fmod(angle_diff + 180.0, 360.0) - 180.0` 改为 `atan2(sin, cos)` 形式。原来的 `fmod` 写法在负角度跨越 0/360 度边界时可能不能正确得到最短角差，例如 `1 deg - 359 deg = -358 deg` 不一定会被折算成 `+2 deg`。
+- 当前统一使用 `EarthEnv.wrap_angle_deg(angle_deg)` 计算角度误差：
+
+```python
+@staticmethod
+def wrap_angle_deg(angle_deg):
+    angle_rad = angle_deg * np.pi / 180.0
+    return ca.atan2(ca.sin(angle_rad), ca.cos(angle_rad)) * 180.0 / np.pi
+```
+
+终端轨道约束中对应写法为：
+
+```python
+err_O = env.wrap_angle_deg(O_fin - O_t)
+err_w = env.wrap_angle_deg(w_fin - w_t)
+err_f = env.wrap_angle_deg(f_fin - f_t)
+```
+
+这样得到的是 `[-180 deg, 180 deg]` 附近的最短有符号角差，更适合处理升交点赤经、近地点幅角和真近点角这类周期角。

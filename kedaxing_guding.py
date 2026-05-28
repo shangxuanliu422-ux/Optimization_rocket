@@ -234,13 +234,13 @@ def solve_boundary(te_val, chucai_te: str | Path, kappa_guess=0.1):
     opti.subject_to( opti.bounded(-tol_i/i_t, (i_fin - i_t)/i_t, tol_i/i_t) )
 
     # 处理角度的周期性硬约束
-    err_O = ca.fmod(Omega_fin - Omega_t + 180.0, 360.0) - 180.0
+    err_O = env.wrap_angle_deg(Omega_fin - Omega_t)
     opti.subject_to( opti.bounded(-tol_O, err_O, tol_O) )
 
-    err_w = ca.fmod(omega_fin - omega_t + 180.0, 360.0) - 180.0
+    err_w = env.wrap_angle_deg(omega_fin - omega_t)
     opti.subject_to( opti.bounded(-tol_w, err_w, tol_w) )
 
-    """ err_f = ca.fmod(f_fin - f_t + 180.0, 360.0) - 180.0
+    """ err_f = env.wrap_angle_deg(f_fin - f_t)
     opti.subject_to( opti.bounded(-tol_f, err_f, tol_f) ) """
     
     # 8. 目标函数 (最大化 kappa = 最小化 -kappa)

@@ -215,9 +215,9 @@ def build_and_solve_fault(cfg: FaultOptimizeConfig, make_plot: bool = False):
 	opti.subject_to(opti.bounded(-tol["e"] / e_t, (e_fin - e_t) / e_t, tol["e"] / e_t))
 	opti.subject_to(opti.bounded(-tol["i"] / i_t, (i_fin - i_t) / i_t, tol["i"] / i_t))
 
-	err_O = ca.fmod(O_fin - O_t + 180.0, 360.0) - 180.0
-	err_w = ca.fmod(w_fin - w_t + 180.0, 360.0) - 180.0
-	err_f = ca.fmod(f_fin - f_t + 180.0, 360.0) - 180.0
+	err_O = env.wrap_angle_deg(O_fin - O_t)
+	err_w = env.wrap_angle_deg(w_fin - w_t)
+	err_f = env.wrap_angle_deg(f_fin - f_t)
 	opti.subject_to(opti.bounded(-tol["Omega"], err_O, tol["Omega"]))
 	opti.subject_to(opti.bounded(-tol["omega"], err_w, tol["omega"]))
 	opti.subject_to(opti.bounded(-tol["f"], err_f, tol["f"]))

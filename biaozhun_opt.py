@@ -22,12 +22,12 @@ RESULTS_DIR = BASE_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
 INIT_GUESS_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
-RESULT_FILE = str(RESULTS_DIR / "biaozhundandao_unlimited.npz")
+RESULT_FILE = str(RESULTS_DIR / "biaozhundandao_new.npz")
 COMPARE_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
 # 是否启用一级程序角 phi 的变化率限制
-ENABLE_DPHI_LIMIT = False
+ENABLE_DPHI_LIMIT = True
 # 是否给控制量加平滑项，抑制姿态突变
-ENABLE_SMOOTHNESS = False
+ENABLE_SMOOTHNESS = True
 
 @dataclass
 class OptimizeConfig:
@@ -223,9 +223,9 @@ def build_and_solve(cfg: OptimizeConfig, make_plot=False):
     opti.subject_to(opti.bounded(-tol["e"] / e_t, (e_fin - e_t) / e_t, tol["e"] / e_t))
     opti.subject_to(opti.bounded(-tol["i"] / i_t, (i_fin - i_t) / i_t, tol["i"] / i_t))
 
-    err_O = ca.fmod(O_fin - O_t + 180.0, 360.0) - 180.0
-    err_w = ca.fmod(w_fin - w_t + 180.0, 360.0) - 180.0
-    err_f = ca.fmod(f_fin - f_t + 180.0, 360.0) - 180.0
+    err_O = env.wrap_angle_deg(O_fin - O_t)
+    err_w = env.wrap_angle_deg(w_fin - w_t)
+    err_f = env.wrap_angle_deg(f_fin - f_t)
 
     opti.subject_to(opti.bounded(-tol["Omega"], err_O, tol["Omega"]))
     opti.subject_to(opti.bounded(-tol["omega"], err_w, tol["omega"]))

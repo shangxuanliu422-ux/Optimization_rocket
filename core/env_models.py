@@ -164,6 +164,12 @@ class EarthEnv:
             ca.horzcat(-ca.sin(angle), ca.cos(angle), 0),
             ca.horzcat(0, 0, 1),
         )
+
+    @staticmethod
+    def wrap_angle_deg(angle_deg):
+        """Return the shortest signed angle difference in degrees."""
+        angle_rad = angle_deg * np.pi / 180.0
+        return ca.atan2(ca.sin(angle_rad), ca.cos(angle_rad)) * 180.0 / np.pi
     
     def atmosphere(self, h):
         use_ca = self._is_ca_backend(h)
