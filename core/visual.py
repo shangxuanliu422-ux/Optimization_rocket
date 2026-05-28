@@ -236,24 +236,27 @@ def plot_from_npz(
 		cmp_data = np.load(cmp_resolved)
 		_, U_cmp, t_cmp = _concat_solution(cmp_data)
 
-		plt.figure(figsize=(16, 6))
+		control_fontsize = 30
+		plt.figure(figsize=(18, 7.5))
 		plt.subplot(1, 2, 1)
 		plt.plot(t_opt, np.degrees(U_opt[0, :]), "--",label=label_current, linewidth=2)
 		plt.plot(t_cmp, np.degrees(U_cmp[0, :]), label=label_compare, linewidth=2)
-		plt.xlabel("t (s)")
-		plt.ylabel("Phi (deg)")
-		plt.title("Phi")
-		plt.grid()
-		plt.legend()
+		plt.xlabel("t (s)", fontsize=control_fontsize)
+		plt.ylabel("Phi (deg)", fontsize=control_fontsize)
+		plt.title("Phi", fontsize=control_fontsize)
+		plt.tick_params(axis="both", labelsize=control_fontsize)
+		plt.grid(alpha=0.2)
+		plt.legend(fontsize=control_fontsize)
 
 		plt.subplot(1, 2, 2)
 		plt.plot(t_opt, np.degrees(U_opt[1, :]), "--",label=label_current, linewidth=2)
 		plt.plot(t_cmp, np.degrees(U_cmp[1, :]), label=label_compare, linewidth=2)
-		plt.xlabel("t (s)")
-		plt.ylabel("Psi (deg)")
-		plt.title("Psi")
-		plt.grid()
-		plt.legend()
+		plt.xlabel("t (s)", fontsize=control_fontsize)
+		plt.ylabel("Psi (deg)", fontsize=control_fontsize)
+		plt.title("Psi", fontsize=control_fontsize)
+		plt.tick_params(axis="both", labelsize=control_fontsize)
+		plt.grid(alpha=0.2)
+		plt.legend(fontsize=control_fontsize)
 
 	# Orbit 3D
 	# 用最终轨道六根数重建理论轨道，与仿真末端轨道做对照。

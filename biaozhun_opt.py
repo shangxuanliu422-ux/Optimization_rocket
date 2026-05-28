@@ -22,12 +22,12 @@ RESULTS_DIR = BASE_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
 INIT_GUESS_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
-RESULT_FILE = str(RESULTS_DIR / "biaozhundandao_unlimited.npz")
+RESULT_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
 COMPARE_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
 # 是否启用一级程序角 phi 的变化率限制
-ENABLE_DPHI_LIMIT = False
+ENABLE_DPHI_LIMIT = True
 # 是否给控制量加平滑项，抑制姿态突变
-ENABLE_SMOOTHNESS = False
+ENABLE_SMOOTHNESS = True
 
 @dataclass
 class OptimizeConfig:
@@ -277,7 +277,7 @@ def build_and_solve(cfg: OptimizeConfig, make_plot=False):
 
     if make_plot:
         # 画图函数会把刚保存的 npz 读取出来，生成轨迹和控制图。
-        plot_from_npz(RESULT_FILE, env=env, compare_npz=COMPARE_FILE, label_current="Unlimited", label_compare="Limited", show=True)
+        plot_from_npz(RESULT_FILE, env=env, compare_npz=COMPARE_FILE, label_current="Unconstrained", label_compare="Constrained", show=True)
 
 
 if __name__ == "__main__":
