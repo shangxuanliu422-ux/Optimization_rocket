@@ -22,12 +22,12 @@ RESULTS_DIR = BASE_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
 INIT_GUESS_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
-RESULT_FILE = str(RESULTS_DIR / "biaozhundandao_new.npz")
+RESULT_FILE = str(RESULTS_DIR / "biaozhundandao_unlimited.npz")
 COMPARE_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
 # 是否启用一级程序角 phi 的变化率限制
-ENABLE_DPHI_LIMIT = True
+ENABLE_DPHI_LIMIT = False
 # 是否给控制量加平滑项，抑制姿态突变
-ENABLE_SMOOTHNESS = True
+ENABLE_SMOOTHNESS = False
 
 @dataclass
 class OptimizeConfig:
@@ -70,7 +70,7 @@ class OptimizeConfig:
 
 	# 权重与求解器
 	# 控制平滑项权重，越大越偏向控制平顺。
-	w_ctrl: float = 100000.0
+	w_ctrl: float = 1000.0
 
 	# IPOPT 求解器参数集中放这里，后续调参更方便。
 	solver_opts: dict = field(
@@ -189,6 +189,7 @@ def build_and_solve(cfg: OptimizeConfig, make_plot=False):
     opti.subject_to(X2[0:3, 0] == ca.DM(env.r0))
     opti.subject_to(X2[3:6, 0] == ca.DM(env.v0))
     opti.subject_to(X2[6, 0] == env.m01)
+    opti.subject_to(U2[1, 0] == 0.0)
 
     k_vert = int(16.0 / dt)
     # 前 16 秒强制垂直上升，对应发射初段的姿态保持。
