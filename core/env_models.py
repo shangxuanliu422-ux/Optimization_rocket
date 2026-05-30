@@ -75,21 +75,6 @@ class EarthEnv:
         self.phi_0_rad = np.arctan((1 - self.e2) * np.tan(np.deg2rad(self.B_0)))
         self.phi_0 = np.rad2deg(self.phi_0_rad)
 
-        # 发射点随地球自转线速度
-        self.v_e = self.omega_e * self.R_fashedian * np.cos(np.deg2rad(self.B_0))
-
-        # 初始状态
-        self.r0 = np.array([0.0, 0.0, 0.0], dtype=float)
-        self.v0 = np.array(
-            [
-                self.v_e * np.sin(np.deg2rad(self.Am)),
-                0.0,
-                self.v_e * np.cos(np.deg2rad(self.Am)),
-            ],
-            dtype=float,
-        )
-        self.y0 = np.concatenate([self.r0, self.v0, np.array([self.m01], dtype=float)])
-
         # 发射坐标系到地心坐标系矩阵（地心 = EG * 发射）
         alpha0 = np.deg2rad(self.Am)
         lambda0 = np.deg2rad(self.E)
@@ -139,6 +124,13 @@ class EarthEnv:
             ],
             dtype=float,
         )
+
+        # 初始状态
+        self.r0 = np.array([0.0, 0.0, 0.0], dtype=float)
+        self.v0 = np.cross(self.omega_e_faguan, self.R_fashe)
+        self.v_e = np.linalg.norm(self.v0) # 发射点线速度的大小，常用于计算近地轨道的初始速度需求
+        self.y0 = np.concatenate([self.r0, self.v0, np.array([self.m01], dtype=float)])
+
 
     @staticmethod # 静态方法，不需要self里的值，只跟传入的参数有关
     def is_casadi_value(x):
