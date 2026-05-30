@@ -22,7 +22,7 @@ RESULTS_DIR = BASE_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
 INIT_GUESS_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
-RESULT_FILE = str(RESULTS_DIR / "fault_case_T4.npz")
+RESULT_FILE = str(RESULTS_DIR / "11111.npz")
 COMPARE_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
 # 是否启用一级程序角 phi 的变化率限制
 ENABLE_DPHI_LIMIT = True
@@ -36,9 +36,9 @@ class FaultOptimizeConfig:
 
 	# 网格与故障设置
 	dt: float = 1.0
-	fault_mode: int = 1  # 0: 无故障, 1: 推力下降时长不变, 2: 推力+秒耗下降且一级延时
-	te: float = 50.0
-	kappa: float = 0.2
+	fault_mode: int = 2  # 0: 无故障, 1: 推力下降时长不变, 2: 推力+秒耗下降且一级延时
+	te: float = 170.0
+	kappa: float = 0.1
 
 	# 第四段时长优化区间（单位：s）
 	T4_guess: float = 239.0
@@ -47,7 +47,7 @@ class FaultOptimizeConfig:
 
 	# 约束参数
 	dphi_max_deg_per_step: float = 0.8
-	w_ctrl: float = 3000.0
+	w_ctrl: float = 1000.0
 
 	# 目标与容差
 	target: dict = field(

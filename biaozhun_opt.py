@@ -23,7 +23,7 @@ RESULTS_DIR.mkdir(exist_ok=True)
 
 INIT_GUESS_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
 RESULT_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
-COMPARE_FILE = str(RESULTS_DIR / "biaozhundandao_unlimited.npz")
+COMPARE_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
 # 是否启用一级程序角 phi 的变化率限制
 ENABLE_DPHI_LIMIT = True
 # 是否给控制量加平滑项，抑制姿态突变

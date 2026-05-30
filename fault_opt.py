@@ -22,7 +22,7 @@ RESULTS_DIR = BASE_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
 INIT_GUESS_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
-RESULT_FILE = str(RESULTS_DIR / "fault_case.npz")
+RESULT_FILE = str(RESULTS_DIR / "111111.npz")
 COMPARE_FILE = str(RESULTS_DIR / "biaozhundandao.npz")
 # 是否启用一级程序角 phi 的变化率限制
 ENABLE_DPHI_LIMIT = True
@@ -35,12 +35,12 @@ class FaultOptimizeConfig:
 	"""故障工况优化参数。"""
 
 	dt: float = 1.0
-	fault_mode: int = 2 # 0: 无故障, 1: 推力下降时长不变, 2: 推力+秒耗下降且一级延时
-	te: float = 155.0
-	kappa: float = 0.11
+	fault_mode: int = 1 # 0: 无故障, 1: 推力下降时长不变, 2: 推力+秒耗下降且一级延时
+	te: float = 199.9
+	kappa: float = 0.01
 
 	dphi_max_deg_per_step: float = 0.8
-	w_ctrl: float = 10.0
+	w_ctrl: float = 1000.0
 
 	target: dict = field(
 		default_factory=lambda: {
