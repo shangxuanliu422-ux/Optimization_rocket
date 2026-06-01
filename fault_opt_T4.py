@@ -37,8 +37,8 @@ class FaultOptimizeConfig:
 	# 网格与故障设置
 	dt: float = 1.0
 	fault_mode: int = 2  # 0: 无故障, 1: 推力下降时长不变, 2: 推力+秒耗下降且一级延时
-	te: float = 170.0
-	kappa: float = 0.1
+	te: float = 160.0
+	kappa: float = 0.6
 
 	# 第四段时长优化区间（单位：s）
 	T4_guess: float = 239.0

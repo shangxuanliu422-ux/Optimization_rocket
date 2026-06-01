@@ -42,7 +42,7 @@ class EarthEnv:
         self.m01 = 1560000.0
         self.m_pao = 30000.0
         self.m_zhengliu = 3200.0
-        self.m_gan = 10000.0
+        self.m_gan = 50000.0
 
         # 气动与大气参数
         self.Cd = 0.4

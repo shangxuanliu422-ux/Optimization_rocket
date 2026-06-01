@@ -121,6 +121,7 @@ def _compute_aero_loads(X_opt, U_opt, h, env):
 		"v_rel": v_rel,
 		"v_rel_norm": v_rel_norm,
 		"theta_rel": theta_rel,
+		"theta_deg": np.degrees(theta_rel),
 		"alpha": alpha,
 		"alpha_deg": np.degrees(alpha),
 		"q": q,
@@ -141,6 +142,36 @@ def _compute_terminal_orbit(r_end, v_end, env):
 		"Omega_deg": float(Omega_deg),
 		"omega_deg": float(omega_deg),
 		"f_deg": float(f_deg),
+	}
+
+
+def compute_derived_history(X_opt, U_opt, t_opt, env=None):
+	"""从优化结果计算绘图和保存用的派生量。
+
+	结果文件的核心信息仍然是 X/U/t。这里把攻角、速度倾角和 q-alpha
+	集中算出来，既可在 npz 里保存，也可让旧 npz 在绘图时即时补算。
+	"""
+	env = env or EarthEnv()
+	r_sim = X_opt[0:3, :]
+	v_sim = X_opt[3:6, :]
+
+	lat, lon, h = _compute_llh_history(r_sim, t_opt, env)
+	aero = _compute_aero_loads(X_opt, U_opt, h, env)
+
+	return {
+		"lat": lat,
+		"lon": lon,
+		"h": h,
+		"speed": np.linalg.norm(v_sim, axis=0),
+		"v_rel_norm": aero["v_rel_norm"],
+		"theta": aero["theta_rel"],
+		"theta_deg": aero["theta_deg"],
+		"alpha": aero["alpha"],
+		"alpha_deg": aero["alpha_deg"],
+		"q": aero["q"],
+		"q_alpha": aero["q_alpha"],
+		"q_alpha_abs": aero["q_alpha_abs"],
+		"aero": aero,
 	}
 
 
@@ -406,6 +437,60 @@ def _plot_control_comparison(
 	_save_figure(fig, figures_dir, "phi_psi_limited_and_unlimited.pdf")
 
 
+def _plot_aero_theta_comparison(
+	t_opt,
+	aero,
+	compare_npz,
+	env,
+	label_current,
+	label_compare,
+	figures_dir,
+):
+	"""叠加故障/标称的 alpha、theta 和 q-alpha 曲线。"""
+	cmp_resolved = _resolve_npz_path(compare_npz)
+	cmp_data = np.load(cmp_resolved)
+	X_cmp, U_cmp, t_cmp = _concat_solution(cmp_data)
+	derived_cmp = compute_derived_history(X_cmp, U_cmp, t_cmp, env)
+
+	label_fontsize = 23
+	tick_fontsize = 20
+	caption_fontsize = 23
+
+	fig, axs = plt.subplots(1, 3, figsize=(22, 7.5))
+	plots = [
+		(
+			aero["alpha_deg"],
+			derived_cmp["alpha_deg"],
+			r"$\alpha$ (deg)",
+			r"(a) Angle of attack $\alpha$",
+		),
+		(
+			aero["theta_deg"],
+			derived_cmp["theta_deg"],
+			r"$\theta$ (deg)",
+			r"(b) Velocity inclination angle $\theta$",
+		),
+		(
+			aero["q_alpha"],
+			derived_cmp["q_alpha"],
+			r"$q\alpha$ (Pa rad)",
+			r"(c) $q\alpha$ load index",
+		),
+	]
+
+	for ax, (current_y, compare_y, ylabel, caption) in zip(axs, plots):
+		ax.plot(t_opt, current_y, label=label_current, linewidth=3)
+		ax.plot(t_cmp, compare_y, "--", label=label_compare, linewidth=3)
+		_style_xy_axis(ax, "Time (s)", ylabel, label_fontsize, tick_fontsize, grid_alpha=0.25)
+		_caption_axis(ax, caption, y=-0.23, fontsize=caption_fontsize)
+
+	axs[0].legend(fontsize=tick_fontsize)
+	axs[1].legend(fontsize=tick_fontsize)
+	axs[2].legend(fontsize=tick_fontsize)
+	fig.tight_layout(rect=[0, 0.13, 1, 0.95])
+	_save_figure(fig, figures_dir, "alpha_theta_qalpha_comparison.pdf")
+
+
 def plot_from_npz(
 	npz_path,
 	env=None,
@@ -419,7 +504,8 @@ def plot_from_npz(
 	主要输出：
 	- `flight_curve.pdf`：高度、速度、质量、相对速度倾角；
 	- `aero_load_curves.pdf`：攻角和有符号 q-alpha 载荷指标；
-	- `phi_psi_limited_and_unlimited.pdf`：可选的程序角对比图。
+	- `phi_psi_limited_and_unlimited.pdf`：可选的程序角对比图；
+	- `alpha_theta_qalpha_comparison.pdf`：可选的攻角/速度倾角/q-alpha 对比图。
 
 	函数也会返回处理后的数据字典，便于后续脚本继续分析。
 	"""
@@ -435,8 +521,11 @@ def plot_from_npz(
 	v_sim = X_opt[3:6, :]
 	m_sim = X_opt[6, :]
 
-	lat, lon, h = _compute_llh_history(r_sim, t_opt, env)
-	aero = _compute_aero_loads(X_opt, U_opt, h, env)
+	derived = compute_derived_history(X_opt, U_opt, t_opt, env)
+	lat = derived["lat"]
+	lon = derived["lon"]
+	h = derived["h"]
+	aero = derived["aero"]
 	orbit = _compute_terminal_orbit(r_sim[:, -1], v_sim[:, -1], env)
 
 	print(f"Final altitude: {h[-1]:.3f} m")
@@ -461,6 +550,7 @@ def plot_from_npz(
 
 	if compare_npz is not None:
 		_plot_control_comparison(t_opt, U_opt, compare_npz, label_current, label_compare, figures_dir)
+		_plot_aero_theta_comparison(t_opt, aero, compare_npz, env, label_current, label_compare, figures_dir)
 
 	if show:
 		plt.show()
@@ -472,6 +562,7 @@ def plot_from_npz(
 		"lat": lat,
 		"lon": lon,
 		"h": h,
+		"derived": derived,
 		"aero": aero,
 		"orbit": orbit,
 	}

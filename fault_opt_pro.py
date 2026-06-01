@@ -35,6 +35,10 @@ T4_FREE = "free"
 
 ENABLE_DPHI_LIMIT = True
 ENABLE_SMOOTHNESS = True
+ENABLE_ALPHA_LIMIT = True
+ALPHA_LIMIT_DEG = 60.0
+ENABLE_QALPHA_LIMIT = True
+QALPHA_LIMIT = 5000.0  # Pa rad = N rad / m^2
 
 # =============================================================================
 # Direct-run settings
@@ -45,8 +49,8 @@ ENABLE_SMOOTHNESS = True
 # Strategy 4: stage-1 free cutoff before propellant depletion, optimized T4.
 STRATEGY_ID = 4
 
-TE = 170.0
-KAPPA = 0.2
+TE = 40.0
+KAPPA = 0.5
 DT = 1.0
 MAKE_PLOT = True
 RUN_ALL_STRATEGIES = False
@@ -54,12 +58,20 @@ RUN_ALL_STRATEGIES = False
 # T4 settings.
 T4_GUESS = 239.0
 T4_MIN = 180.0
-T4_MAX = 450.0
+T4_MAX = 340.0
 T4_FIXED_DURATION = 239.0262
 
 # Free stage-1 cutoff settings.
 STAGE1_FREE_MIN_AFTER_FAULT = 1e-3
-STAGE1_FREE_GUESS = None  # None means initialize at propellant depletion.
+STAGE1_FREE_GUESS = None  # None means initialize near the nominal 200 s cutoff.
+
+# Emergency cutoff settings. When stage-1 thrust is almost gone, minimizing T4
+# alone can treat stage-1 free cutoff as a free coast-time variable. This penalty
+# makes the optimizer prefer jettisoning stage 1 immediately after the fault.
+AUTO_EMERGENCY_CUTOFF = False
+EMERGENCY_KAPPA_THRESHOLD = 0.95
+EMERGENCY_STAGE1_TIME_WEIGHT = 10.0
+W_STAGE1_TIME = 0.0
 
 
 @dataclass
@@ -103,6 +115,10 @@ class FaultProConfig:
     dphi_max_deg_per_step: float = 0.8
     w_ctrl: float = 1000.0
     w_stage1_time: float = 0.0
+    enable_alpha_limit: bool = ENABLE_ALPHA_LIMIT
+    alpha_limit_deg: float = ALPHA_LIMIT_DEG
+    enable_qalpha_limit: bool = ENABLE_QALPHA_LIMIT
+    qalpha_limit: float = QALPHA_LIMIT
 
     init_guess_file: Path = INIT_GUESS_FILE
     compare_file: Path = COMPARE_FILE
@@ -196,6 +212,11 @@ def _direct_config(strategy_id: int = STRATEGY_ID) -> FaultProConfig:
         T4_min=T4_MIN,
         T4_max=T4_MAX,
         T4_fixed=T4_FIXED_DURATION,
+        w_stage1_time=_stage1_time_weight_for_kappa(KAPPA),
+        enable_alpha_limit=ENABLE_ALPHA_LIMIT,
+        alpha_limit_deg=ALPHA_LIMIT_DEG,
+        enable_qalpha_limit=ENABLE_QALPHA_LIMIT,
+        qalpha_limit=QALPHA_LIMIT,
     )
 
 
@@ -213,6 +234,8 @@ def _validate_config(cfg: FaultProConfig, env: EarthEnv) -> None:
         raise ValueError(f"te must be in (0, {env.t_yiji}), got {cfg.te}")
     if cfg.dt <= 0.0:
         raise ValueError(f"dt must be positive, got {cfg.dt}")
+    if cfg.alpha_limit_deg <= 0.0:
+        raise ValueError(f"alpha_limit_deg must be positive, got {cfg.alpha_limit_deg}")
 
 
 def _nominal_t4_duration(data: np.lib.npyio.NpzFile, env: EarthEnv) -> float:
@@ -238,9 +261,15 @@ def _stage1_duration_plan(env: EarthEnv, cfg: FaultProConfig) -> tuple[float, fl
 
     guess = cfg.stage1_free_guess
     if guess is None:
-        guess = max_after_fault
+        guess = min_after_fault if cfg.w_stage1_time > 0.0 else scheduled_after_fault
     guess = float(np.clip(guess, min_after_fault, max_after_fault))
     return min_after_fault, max_after_fault, guess
+
+
+def _stage1_time_weight_for_kappa(kappa: float, base_weight: float = W_STAGE1_TIME) -> float:
+    if AUTO_EMERGENCY_CUTOFF and kappa >= EMERGENCY_KAPPA_THRESHOLD:
+        return max(float(base_weight), float(EMERGENCY_STAGE1_TIME_WEIGHT))
+    return float(base_weight)
 
 
 def _make_mesh_count(duration: float, dt: float) -> int:
@@ -255,6 +284,46 @@ def _smoothness_cost(*controls) -> ca.MX:
         if U.shape[1] >= 3:
             cost += ca.sumsqr(ca.diff(d1, 1, 1))
     return cost
+
+
+def _apply_alpha_limit(opti: ca.Opti, env: EarthEnv, segment_specs, alpha_limit_deg: float) -> None:
+    omega_vec = ca.DM(env.omega_e_faguan)
+    r_launch = ca.DM(env.R_fashe)
+    alpha_limit = np.deg2rad(float(alpha_limit_deg))
+    eps = 1e-9
+
+    for X, U, n_steps, dt, t0 in segment_specs:
+        for k in range(n_steps + 1):
+            t_k = t0 + k * dt
+            r = X[0:3, k]
+            v = X[3:6, k]
+            v_rel = v - ca.cross(omega_vec, r + r_launch)
+            horizontal_speed = ca.sqrt(v_rel[0] ** 2 + v_rel[2] ** 2 + eps)
+            theta_rel = ca.atan2(v_rel[1], horizontal_speed)
+            alpha = U[0, k] - theta_rel
+            opti.subject_to(opti.bounded(-alpha_limit, alpha, alpha_limit))
+
+
+def _apply_qalpha_limit(opti: ca.Opti, env: EarthEnv, segment_specs, qalpha_limit: float) -> None:
+    omega_vec = ca.DM(env.omega_e_faguan)
+    r_launch = ca.DM(env.R_fashe)
+    eps = 1e-9
+
+    for X, U, n_steps, dt, t0 in segment_specs:
+        for k in range(n_steps + 1):
+            t_k = t0 + k * dt
+            r = X[0:3, k]
+            v = X[3:6, k]
+            _, _, h = env.llh(r, t_k)
+            rho = env.atmosphere(h)
+
+            v_rel = v - ca.cross(omega_vec, r + r_launch)
+            v_rel_sq = ca.dot(v_rel, v_rel)
+            horizontal_speed = ca.sqrt(v_rel[0] ** 2 + v_rel[2] ** 2 + eps)
+            theta_rel = ca.atan2(v_rel[1], horizontal_speed)
+            alpha = U[0, k] - theta_rel
+            q_alpha = 0.5 * rho * v_rel_sq * alpha
+            opti.subject_to(opti.bounded(-qalpha_limit, q_alpha, qalpha_limit))
 
 
 def build_and_solve_fault_pro(cfg: FaultProConfig, make_plot: bool = False) -> Path:
@@ -276,6 +345,7 @@ def build_and_solve_fault_pro(cfg: FaultProConfig, make_plot: bool = False) -> P
     T1 = float(cfg.te)
     T3 = float(env.t_zhengliu)
     T2_min, T2_max, T2_guess = _stage1_duration_plan(env, cfg)
+    T2_mesh_ref = env.t_yiji - cfg.te
 
     T4_nominal = _nominal_t4_duration(data, env)
     if cfg.t4_strategy == T4_FIXED:
@@ -286,7 +356,7 @@ def build_and_solve_fault_pro(cfg: FaultProConfig, make_plot: bool = False) -> P
         T4_fixed = None
 
     N1 = _make_mesh_count(T1, cfg.dt)
-    N2 = _make_mesh_count(T2_guess, cfg.dt)
+    N2 = _make_mesh_count(T2_mesh_ref, cfg.dt)
     N3 = _make_mesh_count(T3, cfg.dt)
     N4 = _make_mesh_count(T4_guess, cfg.dt)
 
@@ -353,6 +423,15 @@ def build_and_solve_fault_pro(cfg: FaultProConfig, make_plot: bool = False) -> P
 
     if ENABLE_DPHI_LIMIT:
         apply_dphi_rate_limit(opti, U2, dt_2, cfg.dphi_max_deg_per_step)
+    segment_specs = [
+        (X2, U2, N2, dt_2, T1),
+        (X3, U3, N3, dt_3, T1 + T2),
+        (X4, U4, N4, dt_4, T1 + T2 + T3),
+    ]
+    if cfg.enable_alpha_limit:
+        _apply_alpha_limit(opti, env, segment_specs, cfg.alpha_limit_deg)
+    if cfg.enable_qalpha_limit:
+        _apply_qalpha_limit(opti, env, segment_specs, cfg.qalpha_limit)
 
     ode_stage1_fault = lambda t, x, u: stage1_fault.dynamics(t, x, u, env)
     ode_stage2 = lambda t, x, u: stage2.dynamics(t, x, u, env)
@@ -424,8 +503,19 @@ def build_and_solve_fault_pro(cfg: FaultProConfig, make_plot: bool = False) -> P
         f"stage1_cutoff={cfg.stage1_cutoff_strategy}, "
         f"t4={cfg.t4_strategy}, te={cfg.te:.3f}, kappa={cfg.kappa:.4f}"
     )
+    if cfg.enable_alpha_limit:
+        print(f"Alpha limit: |alpha| <= {cfg.alpha_limit_deg:.3f} deg")
+    if cfg.enable_qalpha_limit:
+        print(f"q-alpha limit: |q*alpha| <= {cfg.qalpha_limit:.3f} Pa rad")
     if cfg.stage1_cutoff_strategy == STAGE1_FREE:
         print(f"Stage-1 post-fault burn bounds: [{T2_min:.6f}, {T2_max:.6f}] s")
+        print(f"Stage-1 post-fault burn initial guess = {T2_guess:.6f} s")
+        print(f"Stage-1 post-fault mesh reference = {T2_mesh_ref:.6f} s, N2 = {N2}")
+        print(f"Stage-1 time penalty weight = {cfg.w_stage1_time:.6g}")
+    if cfg.enable_qalpha_limit:
+        print(f"q-alpha path limit = {cfg.qalpha_limit:.6g} Pa rad")
+    else:
+        print("q-alpha path limit disabled")
 
     sol = opti.solve()
 
@@ -511,6 +601,11 @@ def _build_config_from_args() -> tuple[FaultProConfig, bool, bool]:
     parser.add_argument("--t4-fixed", type=float, default=T4_FIXED_DURATION)
     parser.add_argument("--stage1-free-min-after-fault", type=float, default=STAGE1_FREE_MIN_AFTER_FAULT)
     parser.add_argument("--stage1-free-guess", type=float, default=STAGE1_FREE_GUESS)
+    parser.add_argument("--w-stage1-time", type=float, default=None)
+    parser.add_argument("--alpha-limit-deg", type=float, default=ALPHA_LIMIT_DEG)
+    parser.add_argument("--no-alpha-limit", action="store_true")
+    parser.add_argument("--qalpha-limit", type=float, default=QALPHA_LIMIT)
+    parser.add_argument("--no-qalpha-limit", action="store_true")
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--init-guess", type=Path, default=INIT_GUESS_FILE)
     parser.add_argument("--compare", type=Path, default=COMPARE_FILE)
@@ -523,6 +618,11 @@ def _build_config_from_args() -> tuple[FaultProConfig, bool, bool]:
         stage1_cutoff = args.stage1_cutoff
     if args.t4 is not None:
         t4_strategy = args.t4
+    w_stage1_time = (
+        _stage1_time_weight_for_kappa(args.kappa)
+        if args.w_stage1_time is None
+        else float(args.w_stage1_time)
+    )
 
     cfg = FaultProConfig(
         dt=args.dt,
@@ -536,6 +636,11 @@ def _build_config_from_args() -> tuple[FaultProConfig, bool, bool]:
         T4_min=args.t4_min,
         T4_max=args.t4_max,
         T4_fixed=args.t4_fixed,
+        w_stage1_time=w_stage1_time,
+        enable_alpha_limit=not args.no_alpha_limit,
+        alpha_limit_deg=args.alpha_limit_deg,
+        enable_qalpha_limit=not args.no_qalpha_limit,
+        qalpha_limit=args.qalpha_limit,
         init_guess_file=args.init_guess,
         compare_file=args.compare,
         result_file=args.output,
