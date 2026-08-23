@@ -36,9 +36,11 @@ T4_FREE = "free"
 ENABLE_DPHI_LIMIT = True
 ENABLE_SMOOTHNESS = True
 ENABLE_ALPHA_LIMIT = True
-ALPHA_LIMIT_DEG = 60.0
+ALPHA_MIN_DEG = -60.0
+ALPHA_MAX_DEG = 30.0
 ENABLE_QALPHA_LIMIT = True
 QALPHA_LIMIT = 5000.0  # Pa rad = N rad / m^2
+DPHI_MAX_DEG_PER_STEP = 2
 
 # =============================================================================
 # Direct-run settings
@@ -47,10 +49,10 @@ QALPHA_LIMIT = 5000.0  # Pa rad = N rad / m^2
 # Strategy 2: stage-1 timed cutoff at 200 s, optimized T4.
 # Strategy 3: stage-1 free cutoff before propellant depletion, fixed T4.
 # Strategy 4: stage-1 free cutoff before propellant depletion, optimized T4.
-STRATEGY_ID = 4
+STRATEGY_ID = 1
 
-TE = 40.0
-KAPPA = 0.5
+TE = 195
+KAPPA = 0.0014
 DT = 1.0
 MAKE_PLOT = True
 RUN_ALL_STRATEGIES = False
@@ -109,14 +111,15 @@ class FaultProConfig:
     # T4 settings. T4_guess is used for mesh sizing when T4 is free.
     T4_guess: float = 239.0
     T4_min: float = 180.0
-    T4_max: float = 450.0
+    T4_max: float = 340.0
     T4_fixed: float | None = None
 
-    dphi_max_deg_per_step: float = 0.8
+    dphi_max_deg_per_step: float = DPHI_MAX_DEG_PER_STEP
     w_ctrl: float = 1000.0
     w_stage1_time: float = 0.0
     enable_alpha_limit: bool = ENABLE_ALPHA_LIMIT
-    alpha_limit_deg: float = ALPHA_LIMIT_DEG
+    alpha_min_deg: float = ALPHA_MIN_DEG
+    alpha_max_deg: float = ALPHA_MAX_DEG
     enable_qalpha_limit: bool = ENABLE_QALPHA_LIMIT
     qalpha_limit: float = QALPHA_LIMIT
 
@@ -214,7 +217,8 @@ def _direct_config(strategy_id: int = STRATEGY_ID) -> FaultProConfig:
         T4_fixed=T4_FIXED_DURATION,
         w_stage1_time=_stage1_time_weight_for_kappa(KAPPA),
         enable_alpha_limit=ENABLE_ALPHA_LIMIT,
-        alpha_limit_deg=ALPHA_LIMIT_DEG,
+        alpha_min_deg=ALPHA_MIN_DEG,
+        alpha_max_deg=ALPHA_MAX_DEG,
         enable_qalpha_limit=ENABLE_QALPHA_LIMIT,
         qalpha_limit=QALPHA_LIMIT,
     )
@@ -234,8 +238,11 @@ def _validate_config(cfg: FaultProConfig, env: EarthEnv) -> None:
         raise ValueError(f"te must be in (0, {env.t_yiji}), got {cfg.te}")
     if cfg.dt <= 0.0:
         raise ValueError(f"dt must be positive, got {cfg.dt}")
-    if cfg.alpha_limit_deg <= 0.0:
-        raise ValueError(f"alpha_limit_deg must be positive, got {cfg.alpha_limit_deg}")
+    if cfg.alpha_min_deg >= cfg.alpha_max_deg:
+        raise ValueError(
+            f"alpha_min_deg must be smaller than alpha_max_deg, "
+            f"got {cfg.alpha_min_deg} >= {cfg.alpha_max_deg}"
+        )
 
 
 def _nominal_t4_duration(data: np.lib.npyio.NpzFile, env: EarthEnv) -> float:
@@ -286,10 +293,17 @@ def _smoothness_cost(*controls) -> ca.MX:
     return cost
 
 
-def _apply_alpha_limit(opti: ca.Opti, env: EarthEnv, segment_specs, alpha_limit_deg: float) -> None:
+def _apply_alpha_limit(
+    opti: ca.Opti,
+    env: EarthEnv,
+    segment_specs,
+    alpha_min_deg: float,
+    alpha_max_deg: float,
+) -> None:
     omega_vec = ca.DM(env.omega_e_faguan)
     r_launch = ca.DM(env.R_fashe)
-    alpha_limit = np.deg2rad(float(alpha_limit_deg))
+    alpha_min = np.deg2rad(float(alpha_min_deg))
+    alpha_max = np.deg2rad(float(alpha_max_deg))
     eps = 1e-9
 
     for X, U, n_steps, dt, t0 in segment_specs:
@@ -301,7 +315,7 @@ def _apply_alpha_limit(opti: ca.Opti, env: EarthEnv, segment_specs, alpha_limit_
             horizontal_speed = ca.sqrt(v_rel[0] ** 2 + v_rel[2] ** 2 + eps)
             theta_rel = ca.atan2(v_rel[1], horizontal_speed)
             alpha = U[0, k] - theta_rel
-            opti.subject_to(opti.bounded(-alpha_limit, alpha, alpha_limit))
+            opti.subject_to(opti.bounded(alpha_min, alpha, alpha_max))
 
 
 def _apply_qalpha_limit(opti: ca.Opti, env: EarthEnv, segment_specs, qalpha_limit: float) -> None:
@@ -423,13 +437,15 @@ def build_and_solve_fault_pro(cfg: FaultProConfig, make_plot: bool = False) -> P
 
     if ENABLE_DPHI_LIMIT:
         apply_dphi_rate_limit(opti, U2, dt_2, cfg.dphi_max_deg_per_step)
+        apply_dphi_rate_limit(opti, U3, dt_3, cfg.dphi_max_deg_per_step)
+        apply_dphi_rate_limit(opti, U4, dt_4, cfg.dphi_max_deg_per_step)
     segment_specs = [
         (X2, U2, N2, dt_2, T1),
         (X3, U3, N3, dt_3, T1 + T2),
         (X4, U4, N4, dt_4, T1 + T2 + T3),
     ]
     if cfg.enable_alpha_limit:
-        _apply_alpha_limit(opti, env, segment_specs, cfg.alpha_limit_deg)
+        _apply_alpha_limit(opti, env, segment_specs, cfg.alpha_min_deg, cfg.alpha_max_deg)
     if cfg.enable_qalpha_limit:
         _apply_qalpha_limit(opti, env, segment_specs, cfg.qalpha_limit)
 
@@ -504,7 +520,7 @@ def build_and_solve_fault_pro(cfg: FaultProConfig, make_plot: bool = False) -> P
         f"t4={cfg.t4_strategy}, te={cfg.te:.3f}, kappa={cfg.kappa:.4f}"
     )
     if cfg.enable_alpha_limit:
-        print(f"Alpha limit: |alpha| <= {cfg.alpha_limit_deg:.3f} deg")
+        print(f"Alpha limit: {cfg.alpha_min_deg:.3f} deg <= alpha <= {cfg.alpha_max_deg:.3f} deg")
     if cfg.enable_qalpha_limit:
         print(f"q-alpha limit: |q*alpha| <= {cfg.qalpha_limit:.3f} Pa rad")
     if cfg.stage1_cutoff_strategy == STAGE1_FREE:
@@ -579,7 +595,7 @@ def build_and_solve_fault_pro(cfg: FaultProConfig, make_plot: bool = False) -> P
             str(result_path),
             env=env,
             compare_npz=str(_resolve_input_path(cfg.compare_file)),
-            label_current="FaultPro",
+            label_current="Fault",
             label_compare="Nominal",
             show=True,
         )
@@ -602,7 +618,8 @@ def _build_config_from_args() -> tuple[FaultProConfig, bool, bool]:
     parser.add_argument("--stage1-free-min-after-fault", type=float, default=STAGE1_FREE_MIN_AFTER_FAULT)
     parser.add_argument("--stage1-free-guess", type=float, default=STAGE1_FREE_GUESS)
     parser.add_argument("--w-stage1-time", type=float, default=None)
-    parser.add_argument("--alpha-limit-deg", type=float, default=ALPHA_LIMIT_DEG)
+    parser.add_argument("--alpha-min-deg", type=float, default=ALPHA_MIN_DEG)
+    parser.add_argument("--alpha-max-deg", type=float, default=ALPHA_MAX_DEG)
     parser.add_argument("--no-alpha-limit", action="store_true")
     parser.add_argument("--qalpha-limit", type=float, default=QALPHA_LIMIT)
     parser.add_argument("--no-qalpha-limit", action="store_true")
@@ -638,7 +655,8 @@ def _build_config_from_args() -> tuple[FaultProConfig, bool, bool]:
         T4_fixed=args.t4_fixed,
         w_stage1_time=w_stage1_time,
         enable_alpha_limit=not args.no_alpha_limit,
-        alpha_limit_deg=args.alpha_limit_deg,
+        alpha_min_deg=args.alpha_min_deg,
+        alpha_max_deg=args.alpha_max_deg,
         enable_qalpha_limit=not args.no_qalpha_limit,
         qalpha_limit=args.qalpha_limit,
         init_guess_file=args.init_guess,

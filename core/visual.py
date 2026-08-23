@@ -262,7 +262,7 @@ def _plot_state_panel(t_opt, h, v_sim, m_sim, aero, figures_dir):
 			np.degrees(aero["theta_rel"]),
 			"Time (s)",
 			r"$\theta$ (deg)",
-			"(d) Velocity inclination angle",
+			r"(d) Velocity inclination angle $\theta$",
 		),
 	]
 
@@ -305,15 +305,15 @@ def _plot_aero_loads(t_opt, aero, figures_dir):
 	tick_fontsize = 25
 	caption_fontsize = 28
 
-	fig, axs = plt.subplots(1, 2, figsize=(16, 9))
+	fig, axs = plt.subplots(1, 2, figsize=(16, 8))
 
 	axs[0].plot(t_opt, aero["alpha_deg"], linewidth=3)
 	_style_xy_axis(axs[0], "Time (s)", r"$\alpha$ (deg)", label_fontsize, tick_fontsize)
-	_caption_axis(axs[0], r"(a) Angle of attack $\alpha$", y=-0.17, fontsize=caption_fontsize)
+	_caption_axis(axs[0], r"(a) Angle of attack $\alpha$", y=-0.20, fontsize=caption_fontsize)
 
 	axs[1].plot(t_opt, aero["q_alpha"], linewidth=3)
-	_style_xy_axis(axs[1], "Time (s)", r"$q\alpha$ (Pa rad)", label_fontsize, tick_fontsize)
-	_caption_axis(axs[1], r"(b) $q\alpha$ load index", y=-0.17, fontsize=caption_fontsize)
+	_style_xy_axis(axs[1], "Time (s)", r"$M_q$ (Pa·rad)", label_fontsize, tick_fontsize)
+	_caption_axis(axs[1], r"(b) $M_q$ indicator", y=-0.20, fontsize=caption_fontsize)
 
 	fig.tight_layout(rect=[0, 0.08, 1, 0.93])
 	_save_figure(fig, figures_dir, "aero_load_curves.pdf")
@@ -405,14 +405,22 @@ def _plot_control_comparison(
 	t_opt,
 	U_opt,
 	compare_npz,
+	compare_npz2,
 	label_current,
 	label_compare,
+	label_compare2,
 	figures_dir,
 ):
 	"""如果给定对比结果文件，就叠加两组程序角曲线。"""
 	cmp_resolved = _resolve_npz_path(compare_npz)
 	cmp_data = np.load(cmp_resolved)
 	_, U_cmp, t_cmp = _concat_solution(cmp_data)
+
+	has_compare2 = compare_npz2 is not None
+	if has_compare2:
+		cmp_resolved2 = _resolve_npz_path(compare_npz2)
+		cmp_data2 = np.load(cmp_resolved2)
+		_, U_cmp2, t_cmp2 = _concat_solution(cmp_data2)
 
 	label_fontsize = 28
 	tick_fontsize = 25
@@ -422,14 +430,18 @@ def _plot_control_comparison(
 
 	axs[0].plot(t_opt, np.degrees(U_opt[0, :]), label=label_current, linewidth=3)
 	axs[0].plot(t_cmp, np.degrees(U_cmp[0, :]), "--", label=label_compare, linewidth=3)
-	_style_xy_axis(axs[0], "Times (s)", r"$\varphi$ (deg)", label_fontsize, tick_fontsize, grid_alpha=0.2)
+	if has_compare2:
+		axs[0].plot(t_cmp2, np.degrees(U_cmp2[0, :]), "-.", label=label_compare2, linewidth=3)
+	_style_xy_axis(axs[0], "Time (s)", r"$\varphi$ (deg)", label_fontsize, tick_fontsize, grid_alpha=0.2)
 	axs[0].yaxis.set_major_locator(MultipleLocator(30))
 	axs[0].legend(fontsize=tick_fontsize)
 	_caption_axis(axs[0], r"(a) Pitch program angle $\varphi$", y=-0.17, fontsize=caption_fontsize)
 
 	axs[1].plot(t_opt, np.degrees(U_opt[1, :]), label=label_current, linewidth=3)
 	axs[1].plot(t_cmp, np.degrees(U_cmp[1, :]), "--", label=label_compare, linewidth=3)
-	_style_xy_axis(axs[1], "Times (s)", r"$\psi$ (deg)", label_fontsize, tick_fontsize, grid_alpha=0.2)
+	if has_compare2:
+		axs[1].plot(t_cmp2, np.degrees(U_cmp2[1, :]), "-.", label=label_compare2, linewidth=3)
+	_style_xy_axis(axs[1], "Time (s)", r"$\psi$ (deg)", label_fontsize, tick_fontsize, grid_alpha=0.2)
 	axs[1].legend(fontsize=tick_fontsize)
 	_caption_axis(axs[1], r"(b) Yaw program angle $\psi$", y=-0.17, fontsize=caption_fontsize)
 
@@ -441,9 +453,11 @@ def _plot_aero_theta_comparison(
 	t_opt,
 	aero,
 	compare_npz,
+	compare_npz2,
 	env,
 	label_current,
 	label_compare,
+	label_compare2,
 	figures_dir,
 ):
 	"""叠加故障/标称的 alpha、theta 和 q-alpha 曲线。"""
@@ -452,51 +466,57 @@ def _plot_aero_theta_comparison(
 	X_cmp, U_cmp, t_cmp = _concat_solution(cmp_data)
 	derived_cmp = compute_derived_history(X_cmp, U_cmp, t_cmp, env)
 
-	label_fontsize = 23
-	tick_fontsize = 20
-	caption_fontsize = 23
+	has_compare2 = compare_npz2 is not None
+	if has_compare2:
+		cmp_resolved2 = _resolve_npz_path(compare_npz2)
+		cmp_data2 = np.load(cmp_resolved2)
+		X_cmp2, U_cmp2, t_cmp2 = _concat_solution(cmp_data2)
+		derived_cmp2 = compute_derived_history(X_cmp2, U_cmp2, t_cmp2, env)
 
-	fig, axs = plt.subplots(1, 3, figsize=(22, 7.5))
+	label_fontsize = 28
+	tick_fontsize = 25
+	caption_fontsize = 28
+
+	fig, axs = plt.subplots(1, 2, figsize=(17, 9))
 	plots = [
 		(
 			aero["alpha_deg"],
 			derived_cmp["alpha_deg"],
+			derived_cmp2["alpha_deg"] if has_compare2 else None,
 			r"$\alpha$ (deg)",
 			r"(a) Angle of attack $\alpha$",
 		),
 		(
-			aero["theta_deg"],
-			derived_cmp["theta_deg"],
-			r"$\theta$ (deg)",
-			r"(b) Velocity inclination angle $\theta$",
-		),
-		(
 			aero["q_alpha"],
 			derived_cmp["q_alpha"],
-			r"$q\alpha$ (Pa rad)",
-			r"(c) $q\alpha$ load index",
+			derived_cmp2["q_alpha"] if has_compare2 else None,
+			r"$M_q$ (Pa·rad)",
+			r"(b) $M_q$ indicator",
 		),
 	]
 
-	for ax, (current_y, compare_y, ylabel, caption) in zip(axs, plots):
+	for ax, (current_y, compare_y, compare_y2, ylabel, caption) in zip(axs, plots):
 		ax.plot(t_opt, current_y, label=label_current, linewidth=3)
 		ax.plot(t_cmp, compare_y, "--", label=label_compare, linewidth=3)
+		if has_compare2:
+			ax.plot(t_cmp2, compare_y2, "-.", label=label_compare2, linewidth=3)
 		_style_xy_axis(ax, "Time (s)", ylabel, label_fontsize, tick_fontsize, grid_alpha=0.25)
-		_caption_axis(ax, caption, y=-0.23, fontsize=caption_fontsize)
+		_caption_axis(ax, caption, y=-0.17, fontsize=caption_fontsize)
 
 	axs[0].legend(fontsize=tick_fontsize)
 	axs[1].legend(fontsize=tick_fontsize)
-	axs[2].legend(fontsize=tick_fontsize)
-	fig.tight_layout(rect=[0, 0.13, 1, 0.95])
-	_save_figure(fig, figures_dir, "alpha_theta_qalpha_comparison.pdf")
+	fig.tight_layout(rect=[0, 0.12, 1, 0.92])
+	_save_figure(fig, figures_dir, "alpha_qalpha_comparison.pdf")
 
 
 def plot_from_npz(
 	npz_path,
 	env=None,
 	compare_npz=None,
-	label_current="Constrained",
-	label_compare="Unconstrained",
+	compare_npz2=None,
+	label_current="S3: Joint adjustment",
+	label_compare="S2: Stage-2 adjustable",
+	label_compare2 = "Nominal trajectory",
 	show=True,
 ):
 	"""读取优化结果并生成完整可视化图像。
@@ -549,8 +569,8 @@ def plot_from_npz(
 	_plot_space_results(lon, lat, h, orbit, figures_dir)
 
 	if compare_npz is not None:
-		_plot_control_comparison(t_opt, U_opt, compare_npz, label_current, label_compare, figures_dir)
-		_plot_aero_theta_comparison(t_opt, aero, compare_npz, env, label_current, label_compare, figures_dir)
+		_plot_control_comparison(t_opt, U_opt, compare_npz, compare_npz2, label_current, label_compare, label_compare2, figures_dir)
+		_plot_aero_theta_comparison(t_opt, aero, compare_npz, compare_npz2, env, label_current, label_compare, label_compare2, figures_dir)
 
 	if show:
 		plt.show()
@@ -570,6 +590,6 @@ def plot_from_npz(
 
 if __name__ == "__main__":
 	# 直接运行本文件时，默认读取标准弹道结果，并叠加一组对比结果。
-	plot_from_npz("results/biaozhundandao.npz", compare_npz="results/biaozhundandao_unlimited.npz")
+	plot_from_npz("results/fault_opt_pro_stage1-free_t4-free.npz", compare_npz="results/fault_opt_pro_stage1-timed_t4-free.npz", compare_npz2="results/biaozhundandao.npz")
 	# 如果不需要对比图，可以改成：
 	# plot_from_npz("results/biaozhundandao.npz")

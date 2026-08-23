@@ -28,9 +28,9 @@ class ReplayConfig:
     """步长验证配置。"""
 
     # 初猜文件，既支持绝对路径，也支持工程根目录或 results 目录下的文件名。
-    input_npz: str = "biaozhundandao_unlimited.npz"
+    input_npz: str = "biaozhundandao.npz"
     # 回放积分步长，默认设为 0.1，用来验证更细步长下的结果。
-    dt: float = 0.1
+    dt: float = 1
 
     # 故障设置：0 表示无故障，1 表示推力下降但一级时长不变，2 表示推力和秒耗都下降且一级时长延长。
     fault_mode: int = 0

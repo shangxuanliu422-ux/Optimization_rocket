@@ -67,7 +67,7 @@ class ReachabilityConfig:
 
     T4_guess: float = 239.0
     T4_min: float = 180.0
-    T4_max: float = 450.0
+    T4_max: float = 340.0
     T4_fixed: float | None = None
     final_mass_min: float | None = None
     stage1_free_min_after_fault: float = 1e-3
@@ -82,7 +82,8 @@ class ReachabilityConfig:
     w_stage1_time: float = 0.0
 
     enable_alpha_limit: bool = True
-    alpha_limit_deg: float = 60.0
+    alpha_min_deg: float = -60.0
+    alpha_max_deg: float = 30.0
     enable_qalpha_limit: bool = True
     qalpha_limit: float = 5000.0
 
@@ -115,7 +116,7 @@ class ReachabilityConfig:
             "mumps_pivtolmax": 1e-4,
             "tol": 1e-8,
             "acceptable_tol": 1e-6,
-            "max_iter": 500,
+            "max_iter": 3000,
             "print_level": 0,
             "sb": "yes",
         }
@@ -174,10 +175,17 @@ def smoothness_cost(*controls) -> ca.MX:
     return cost
 
 
-def apply_alpha_limit(opti: ca.Opti, env: EarthEnv, segment_specs, alpha_limit_deg: float) -> None:
+def apply_alpha_limit(
+    opti: ca.Opti,
+    env: EarthEnv,
+    segment_specs,
+    alpha_min_deg: float,
+    alpha_max_deg: float,
+) -> None:
     omega_vec = ca.DM(env.omega_e_faguan)
     r_launch = ca.DM(env.R_fashe)
-    alpha_limit = np.deg2rad(float(alpha_limit_deg))
+    alpha_min = np.deg2rad(float(alpha_min_deg))
+    alpha_max = np.deg2rad(float(alpha_max_deg))
     eps = 1e-9
 
     for X, U, n_steps, dt, t0 in segment_specs:
@@ -189,7 +197,7 @@ def apply_alpha_limit(opti: ca.Opti, env: EarthEnv, segment_specs, alpha_limit_d
             horizontal_speed = ca.sqrt(v_rel[0] ** 2 + v_rel[2] ** 2 + eps)
             theta_rel = ca.atan2(v_rel[1], horizontal_speed)
             alpha = U[0, k] - theta_rel
-            opti.subject_to(opti.bounded(-alpha_limit, alpha, alpha_limit))
+            opti.subject_to(opti.bounded(alpha_min, alpha, alpha_max))
 
 
 def apply_qalpha_limit(opti: ca.Opti, env: EarthEnv, segment_specs, qalpha_limit: float) -> None:
@@ -397,7 +405,7 @@ def _solve_reachability_case_impl(
         (X4, U4, N4, dt_4, T1 + T2 + T3),
     ]
     if cfg.enable_alpha_limit:
-        apply_alpha_limit(opti, env, segment_specs, cfg.alpha_limit_deg)
+        apply_alpha_limit(opti, env, segment_specs, cfg.alpha_min_deg, cfg.alpha_max_deg)
     if cfg.enable_qalpha_limit:
         apply_qalpha_limit(opti, env, segment_specs, cfg.qalpha_limit)
 
@@ -562,8 +570,8 @@ def load_scan_npz(path: str | Path) -> dict:
             if candidate.exists():
                 path = candidate
                 break
-    data = np.load(path, allow_pickle=True)
-    return {key: data[key] for key in data.files}
+    with np.load(path, allow_pickle=True) as data:
+        return {key: np.array(data[key]) for key in data.files}
 
 
 def scan_terminal_relaxation_grid(
@@ -597,7 +605,8 @@ def scan_terminal_relaxation_grid(
             w_smoothness=cfg.w_smoothness,
             w_stage1_time=cfg.w_stage1_time,
             enable_alpha_limit=cfg.enable_alpha_limit,
-            alpha_limit_deg=cfg.alpha_limit_deg,
+            alpha_min_deg=cfg.alpha_min_deg,
+            alpha_max_deg=cfg.alpha_max_deg,
             enable_qalpha_limit=cfg.enable_qalpha_limit,
             qalpha_limit=cfg.qalpha_limit,
             target=cfg.target,

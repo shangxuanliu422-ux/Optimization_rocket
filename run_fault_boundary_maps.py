@@ -23,18 +23,45 @@ from fault_reachability_core import (
 )
 
 
+plt.rcParams["font.family"] = "Times New Roman"
+plt.rcParams["mathtext.fontset"] = "stix"
+plt.rcParams["lines.linewidth"] = 2.2
+
+PLOT_LABEL_FONTSIZE = 20
+PLOT_TICK_FONTSIZE = 17
+PLOT_CAPTION_FONTSIZE = 20
+PLOT_LEGEND_FONTSIZE = 17
+PLOT_MARKER_SIZE = 1.0
+PLOT_MARKER_EDGE_WIDTH = 1
+
+
 # =============================================================================
 # Direct-run settings
 # =============================================================================
 # RUN_SCAN=True: solve boundary curves, save npz, then plot.
 # RUN_SCAN=False: only redraw from RESULT_FILE.
-RUN_SCAN = True
+RUN_SCAN = False
 SHOW_FIGURES = True
 USE_MULTIPROCESSING = True
 N_WORKERS = 8
 SHOW_BISECTION_LOG = True
 
-RESULT_FILE = RESULTS_DIR / "fault_boundary_kappa_max.npz"
+# None means auto-name by strategy, for example:
+#   S0 -> results/fault_boundary_S0.npz
+#   S2 -> results/fault_boundary_S2.npz
+# If you set a concrete Path and run multiple strategies, the strategy name is
+# appended to the stem so the files still remain separate.
+RESULT_FILE = None
+
+# Resume mode:
+# - Existing points in each strategy npz are skipped.
+# - New points are saved immediately after each boundary point finishes.
+# - Set FORCE_RERUN_EXISTING=True only when you changed constraints and want to
+#   overwrite old points for the same strategy/te.
+FORCE_RERUN_EXISTING = False
+SAVE_AFTER_EACH_POINT = True
+# False means failed/NaN points will be retried on the next run.
+SKIP_FAILED_EXISTING = False
 
 # Match fault_opt_pro direct-run settings. AUTO_EMERGENCY_CUTOFF is intentionally
 # not used here; boundary scans keep T2 initial guess at 200 s - te.
@@ -42,18 +69,24 @@ DT = 1.0
 ENABLE_DPHI_LIMIT = True
 ENABLE_SMOOTHNESS = True
 ENABLE_ALPHA_LIMIT = True
-ALPHA_LIMIT_DEG = 60.0
+ALPHA_MIN_DEG = -60.0
+ALPHA_MAX_DEG = 30.0
 ENABLE_QALPHA_LIMIT = True
 QALPHA_LIMIT = 5000.0  # Pa rad = N rad / m^2
 
+# Plot only: missing points from another strategy are ignored. Keep real large
+# jumps connected; explain discontinuities in text if needed.
+BREAK_LARGE_KAPPA_JUMPS = False
+KAPPA_JUMP_BREAK = 0.25
+
 # Boundary curve x-axis. For paper-quality curves, densify this list.
-TE_VALUES = np.array([175], dtype=float)
+TE_VALUES = np.array([16,20,25,30,40,50], dtype=float)
 
 # Optional per-strategy x-axis. Use this when one strategy has a tiny reachable
 # region, such as S0 only being meaningful near 195-200 s.
 # None means "use TE_VALUES".
 TE_VALUES_BY_STRATEGY = {
-    S0: np.array([199.99], dtype=float),
+    S0: np.array([16], dtype=float),
     S1: None,
     S2: None,
     S3: None,
@@ -63,16 +96,17 @@ TE_VALUES_BY_STRATEGY = {
 # S1: stage-1 cutoff adjustable from failure time + fixed T4
 # S2: fixed stage-1 + adjustable T4
 # S3: stage-1 cutoff adjustable from failure time + adjustable T4
-STRATEGIES = [S3]
+# You may run one or more strategies; each strategy is saved to its own npz.
+STRATEGIES = [S0]
 
 # Search interval for kappa_max.
 KAPPA_LOW = 0.0
 # Do not use exactly 1.0 here: the stage-1 depletion formula contains
 # 1 / (1 - kappa), so kappa=1 is a singular endpoint.
-KAPPA_HIGH = 0.999
+KAPPA_HIGH = 0.02
 # Each boundary point solves about 2 + BISECTION_ITERS nonlinear programs.
 # Use 4-5 while debugging; increase to 8-10 for a paper-quality boundary.
-BISECTION_ITERS = 3
+BISECTION_ITERS = 10
 
 # Keep None to use EarthEnv.m_gan. Set for example 100000.0 if you want a
 # stricter terminal mass / second-stage dry-mass lower bound.
@@ -104,11 +138,28 @@ class BoundaryPoint:
     message: str = ""
 
 
+def current_result_file() -> Path:
+    if RESULT_FILE is not None and len(STRATEGIES) == 1:
+        return Path(RESULT_FILE)
+    suffix = "_".join(str(strategy) for strategy in STRATEGIES)
+    return RESULTS_DIR / f"fault_boundary_{suffix}.npz"
+
+
+def strategy_result_file(strategy: str) -> Path:
+    if RESULT_FILE is None:
+        return RESULTS_DIR / f"fault_boundary_{strategy}.npz"
+
+    path = Path(RESULT_FILE)
+    if len(STRATEGIES) == 1:
+        return path
+    return path.with_name(f"{path.stem}_{strategy}{path.suffix}")
+
+
 def build_config() -> ReachabilityConfig:
     return ReachabilityConfig(
         dt=DT,
         init_guess_file=INIT_GUESS_FILE,
-        result_file=RESULT_FILE,
+        result_file=current_result_file(),
         T4_guess=T4_GUESS,
         T4_min=T4_MIN,
         T4_max=T4_MAX,
@@ -120,7 +171,8 @@ def build_config() -> ReachabilityConfig:
         w_smoothness=W_SMOOTHNESS,
         w_stage1_time=W_STAGE1_TIME,
         enable_alpha_limit=ENABLE_ALPHA_LIMIT,
-        alpha_limit_deg=ALPHA_LIMIT_DEG,
+        alpha_min_deg=ALPHA_MIN_DEG,
+        alpha_max_deg=ALPHA_MAX_DEG,
         enable_qalpha_limit=ENABLE_QALPHA_LIMIT,
         qalpha_limit=QALPHA_LIMIT,
     )
@@ -214,6 +266,163 @@ def _all_te_values_for_scan(strategies: list[str]) -> np.ndarray:
     return np.asarray(sorted(set(float(v) for v in values)), dtype=float)
 
 
+def _make_empty_scan(strategies: list[str], te_values: np.ndarray, cfg: ReachabilityConfig) -> dict:
+    shape = (len(strategies), len(te_values))
+    return {
+        "te": te_values,
+        "strategies": np.asarray(strategies),
+        "scanned": np.zeros(shape, dtype=bool),
+        "reachable": np.zeros(shape, dtype=bool),
+        "kappa_max": np.full(shape, np.nan),
+        "delta_T1": np.full(shape, np.nan),
+        "eta1": np.full(shape, np.nan),
+        "delta_T4": np.full(shape, np.nan),
+        "T1_sep": np.full(shape, np.nan),
+        "T1_dep": np.full(shape, np.nan),
+        "T4_duration": np.full(shape, np.nan),
+        "messages": np.full(shape, "", dtype=object),
+    }
+
+
+def _merge_existing_scan(
+    existing: dict | None,
+    requested_strategies: list[str],
+    requested_te_values: np.ndarray,
+    cfg: ReachabilityConfig,
+) -> dict:
+    if existing is None:
+        return _make_empty_scan(requested_strategies, requested_te_values, cfg)
+
+    old_strategies = [str(item) for item in existing.get("strategies", [])]
+    strategies = list(old_strategies)
+    for strategy in requested_strategies:
+        if strategy not in strategies:
+            strategies.append(strategy)
+
+    old_te = np.asarray(existing.get("te", []), dtype=float)
+    te_values = np.asarray(sorted(set(old_te.tolist() + requested_te_values.tolist())), dtype=float)
+    scan = _make_empty_scan(strategies, te_values, cfg)
+
+    new_strategy_to_idx = {strategy: idx for idx, strategy in enumerate(strategies)}
+    new_te_to_idx = {float(te): idx for idx, te in enumerate(te_values)}
+
+    keys = [
+        "scanned",
+        "reachable",
+        "kappa_max",
+        "delta_T1",
+        "eta1",
+        "delta_T4",
+        "T1_sep",
+        "T1_dep",
+        "T4_duration",
+        "messages",
+    ]
+    for old_s_idx, strategy in enumerate(old_strategies):
+        if strategy not in new_strategy_to_idx:
+            continue
+        new_s_idx = new_strategy_to_idx[strategy]
+        for old_t_idx, te in enumerate(old_te):
+            new_t_idx = new_te_to_idx.get(float(te))
+            if new_t_idx is None:
+                continue
+            for key in keys:
+                if key in existing:
+                    scan[key][new_s_idx, new_t_idx] = existing[key][old_s_idx, old_t_idx]
+
+    return scan
+
+
+def _load_existing_scan(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    print(f"Resume from existing boundary data: {path}", flush=True)
+    return load_boundary_npz(path)
+
+
+def _scan_indices(scan: dict) -> tuple[dict[str, int], dict[float, int]]:
+    strategies = [str(item) for item in scan["strategies"]]
+    te_values = np.asarray(scan["te"], dtype=float)
+    return (
+        {strategy: idx for idx, strategy in enumerate(strategies)},
+        {float(te): idx for idx, te in enumerate(te_values)},
+    )
+
+
+def _store_point_in_scan(scan: dict, strategy: str, te: float, point: BoundaryPoint) -> None:
+    strategy_to_idx, te_to_idx = _scan_indices(scan)
+    s_idx = strategy_to_idx[strategy]
+    t_idx = te_to_idx[float(te)]
+    scan["scanned"][s_idx, t_idx] = True
+    scan["reachable"][s_idx, t_idx] = point.reachable
+    scan["kappa_max"][s_idx, t_idx] = point.kappa_max
+    scan["delta_T1"][s_idx, t_idx] = point.delta_T1
+    scan["eta1"][s_idx, t_idx] = point.eta1
+    scan["delta_T4"][s_idx, t_idx] = point.delta_T4
+    scan["T1_sep"][s_idx, t_idx] = point.T1_sep
+    scan["T1_dep"][s_idx, t_idx] = point.T1_dep
+    scan["T4_duration"][s_idx, t_idx] = point.T4_duration
+    scan["messages"][s_idx, t_idx] = point.message
+
+
+def _point_is_valid(scan: dict, strategy: str, te: float) -> bool:
+    strategy_to_idx, te_to_idx = _scan_indices(scan)
+    s_idx = strategy_to_idx[strategy]
+    t_idx = te_to_idx[float(te)]
+    return bool(scan["reachable"][s_idx, t_idx]) and np.isfinite(scan["kappa_max"][s_idx, t_idx])
+
+
+def _point_is_scanned(scan: dict, strategy: str, te: float) -> bool:
+    strategy_to_idx, te_to_idx = _scan_indices(scan)
+    return bool(scan["scanned"][strategy_to_idx[strategy], te_to_idx[float(te)]])
+
+
+def _combine_strategy_scans(strategy_scans: dict[str, dict], requested_strategies: list[str], cfg: ReachabilityConfig) -> dict:
+    te_all = []
+    for strategy in requested_strategies:
+        te_all.extend(np.asarray(strategy_scans[strategy]["te"], dtype=float).tolist())
+    te_values = np.asarray(sorted(set(float(te) for te in te_all)), dtype=float)
+    combined = _make_empty_scan(requested_strategies, te_values, cfg)
+
+    keys = [
+        "scanned",
+        "reachable",
+        "kappa_max",
+        "delta_T1",
+        "eta1",
+        "delta_T4",
+        "T1_sep",
+        "T1_dep",
+        "T4_duration",
+        "messages",
+    ]
+    combined_strategy_to_idx, combined_te_to_idx = _scan_indices(combined)
+
+    for strategy, source in strategy_scans.items():
+        source_strategy_to_idx, source_te_to_idx = _scan_indices(source)
+        if strategy not in source_strategy_to_idx:
+            continue
+        source_s_idx = source_strategy_to_idx[strategy]
+        combined_s_idx = combined_strategy_to_idx[strategy]
+        for te, source_t_idx in source_te_to_idx.items():
+            combined_t_idx = combined_te_to_idx[float(te)]
+            for key in keys:
+                combined[key][combined_s_idx, combined_t_idx] = source[key][source_s_idx, source_t_idx]
+
+    return combined
+
+
+def load_selected_strategy_scans(cfg: ReachabilityConfig) -> dict:
+    strategy_scans = {}
+    for strategy in STRATEGIES:
+        path = strategy_result_file(strategy)
+        existing = _load_existing_scan(path)
+        if existing is None:
+            raise FileNotFoundError(f"No boundary data for {strategy}: {path}")
+        strategy_scans[strategy] = _merge_existing_scan(existing, [strategy], _strategy_te_values(strategy), cfg)
+    return _combine_strategy_scans(strategy_scans, list(STRATEGIES), cfg)
+
+
 def _boundary_worker(strategy: str, te: float, cfg: ReachabilityConfig) -> tuple[str, float, BoundaryPoint, float]:
     start = perf_counter()
     env = EarthEnv(target=cfg.target)
@@ -224,53 +433,51 @@ def _boundary_worker(strategy: str, te: float, cfg: ReachabilityConfig) -> tuple
 
 
 def scan_boundary_curves(cfg: ReachabilityConfig) -> dict:
-    strategies = list(STRATEGIES)
-    te_values = _all_te_values_for_scan(strategies)
-    te_to_idx = {float(te): idx for idx, te in enumerate(te_values)}
-    strategy_to_idx = {strategy: idx for idx, strategy in enumerate(strategies)}
-
-    shape = (len(strategies), len(te_values))
-
-    kappa_max = np.full(shape, np.nan)
-    reachable = np.zeros(shape, dtype=bool)
-    delta_T1 = np.full(shape, np.nan)
-    eta1 = np.full(shape, np.nan)
-    delta_T4 = np.full(shape, np.nan)
-    T1_sep = np.full(shape, np.nan)
-    T1_dep = np.full(shape, np.nan)
-    T4_duration = np.full(shape, np.nan)
-    messages = np.empty(shape, dtype=object)
-    scanned = np.zeros(shape, dtype=bool)
+    requested_strategies = list(STRATEGIES)
+    strategy_paths = {strategy: strategy_result_file(strategy) for strategy in requested_strategies}
+    strategy_scans = {}
+    for strategy in requested_strategies:
+        strategy_scans[strategy] = _merge_existing_scan(
+            _load_existing_scan(strategy_paths[strategy]),
+            [strategy],
+            _strategy_te_values(strategy),
+            cfg,
+        )
 
     jobs = []
-    for s_idx, strategy in enumerate(strategies):
+    skipped = 0
+    for strategy in requested_strategies:
+        strategy_scan = strategy_scans[strategy]
         for te in _strategy_te_values(strategy):
+            point_is_valid = _point_is_valid(strategy_scan, strategy, float(te))
+            point_can_skip = _point_is_scanned(strategy_scan, strategy, float(te)) and (
+                point_is_valid or SKIP_FAILED_EXISTING
+            )
+            if point_can_skip and not FORCE_RERUN_EXISTING:
+                skipped += 1
+                print(f"SKIP existing {strategy}: te={float(te):.3f}", flush=True)
+                continue
+            if _point_is_scanned(strategy_scan, strategy, float(te)) and not point_is_valid and not FORCE_RERUN_EXISTING:
+                print(f"RETRY failed/invalid {strategy}: te={float(te):.3f}", flush=True)
             jobs.append((strategy, float(te)))
 
     total = len(jobs)
+    result_files_text = ", ".join(f"{strategy}={path.name}" for strategy, path in strategy_paths.items())
     print(
         "Boundary config: "
+        f"result_files=({result_files_text}), "
         f"dt={cfg.dt}, T4=[{cfg.T4_min}, {cfg.T4_max}], T4_fixed={cfg.T4_fixed}, "
         f"smoothness={'on' if cfg.enable_smoothness else 'off'}({cfg.w_smoothness}), "
-        f"alpha_limit={'on' if cfg.enable_alpha_limit else 'off'}({cfg.alpha_limit_deg} deg), "
+        f"alpha_limit={'on' if cfg.enable_alpha_limit else 'off'}"
+        f"([{cfg.alpha_min_deg}, {cfg.alpha_max_deg}] deg), "
         f"qalpha_limit={'on' if cfg.enable_qalpha_limit else 'off'}({cfg.qalpha_limit} Pa rad), "
         "T2_guess=200s-te",
         flush=True,
     )
 
     def store_point(strategy: str, te: float, point: BoundaryPoint, count: int, elapsed: float | None = None) -> None:
-        s_idx = strategy_to_idx[strategy]
-        t_idx = te_to_idx[float(te)]
-        scanned[s_idx, t_idx] = True
-        reachable[s_idx, t_idx] = point.reachable
-        kappa_max[s_idx, t_idx] = point.kappa_max
-        delta_T1[s_idx, t_idx] = point.delta_T1
-        eta1[s_idx, t_idx] = point.eta1
-        delta_T4[s_idx, t_idx] = point.delta_T4
-        T1_sep[s_idx, t_idx] = point.T1_sep
-        T1_dep[s_idx, t_idx] = point.T1_dep
-        T4_duration[s_idx, t_idx] = point.T4_duration
-        messages[s_idx, t_idx] = point.message
+        strategy_scan = strategy_scans[strategy]
+        _store_point_in_scan(strategy_scan, strategy, te, point)
         elapsed_text = f", time={elapsed:.1f}s" if elapsed is not None else ""
         prefix = f"[{count}/{total}] DONE {strategy}: te={te:.3f}{elapsed_text}"
         if point.reachable:
@@ -280,6 +487,12 @@ def scan_boundary_curves(cfg: ReachabilityConfig) -> dict:
             )
         else:
             print(f"{prefix} failed: {point.message[:120]}")
+        if SAVE_AFTER_EACH_POINT:
+            save_boundary_npz(strategy_paths[strategy], strategy_scan, quiet=True)
+
+    if total == 0:
+        print(f"No new boundary jobs. Reused {skipped} existing point(s).", flush=True)
+        return _combine_strategy_scans(strategy_scans, requested_strategies, cfg)
 
     if USE_MULTIPROCESSING and N_WORKERS > 1 and total > 1:
         print(f"Running {total} boundary jobs with {N_WORKERS} worker processes.")
@@ -318,42 +531,21 @@ def scan_boundary_curves(cfg: ReachabilityConfig) -> dict:
             )
             store_point(strategy, te, point, count, elapsed=perf_counter() - start)
 
-    return {
-        "te": te_values,
-        "strategies": np.asarray(strategies),
-        "scanned": scanned,
-        "reachable": reachable,
-        "kappa_max": kappa_max,
-        "delta_T1": delta_T1,
-        "eta1": eta1,
-        "delta_T4": delta_T4,
-        "T1_sep": T1_sep,
-        "T1_dep": T1_dep,
-        "T4_duration": T4_duration,
-        "messages": messages,
-        "kappa_low": np.array(KAPPA_LOW),
-        "kappa_high": np.array(KAPPA_HIGH),
-        "bisection_iters": np.array(BISECTION_ITERS),
-        "dt": np.array(cfg.dt),
-        "T4_guess": np.array(cfg.T4_guess),
-        "T4_min": np.array(cfg.T4_min),
-        "T4_max": np.array(cfg.T4_max),
-        "T4_fixed": np.array(cfg.T4_fixed),
-        "stage1_free_min_after_fault": np.array(cfg.stage1_free_min_after_fault),
-        "enable_smoothness": np.array(cfg.enable_smoothness),
-        "w_smoothness": np.array(cfg.w_smoothness),
-        "w_stage1_time": np.array(cfg.w_stage1_time),
-        "enable_alpha_limit": np.array(cfg.enable_alpha_limit),
-        "alpha_limit_deg": np.array(cfg.alpha_limit_deg),
-        "enable_qalpha_limit": np.array(cfg.enable_qalpha_limit),
-        "qalpha_limit": np.array(cfg.qalpha_limit),
-    }
+    if not SAVE_AFTER_EACH_POINT:
+        for strategy, strategy_scan in strategy_scans.items():
+            save_boundary_npz(strategy_paths[strategy], strategy_scan, quiet=True)
+
+    return _combine_strategy_scans(strategy_scans, requested_strategies, cfg)
 
 
-def save_boundary_npz(path: Path, scan: dict) -> Path:
+def save_boundary_npz(path: Path, scan: dict, quiet: bool = False) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(path, **scan)
-    print(f"Saved boundary data: {path}")
+    tmp_path = path.with_name(path.name + ".tmp")
+    with tmp_path.open("wb") as f:
+        np.savez(f, **scan)
+    tmp_path.replace(path)
+    if not quiet:
+        print(f"Saved boundary data: {path}")
     return path
 
 
@@ -362,75 +554,99 @@ def load_boundary_npz(path: Path) -> dict:
     return {key: data[key] for key in data.files}
 
 
+def _finite_xy(x, y):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    return x[mask], y[mask]
+
+
+def _boundary_segments(x, y, jump_break: float | None = None):
+    x, y = _finite_xy(x, y)
+    if len(x) == 0:
+        return []
+
+    segments = []
+    start = 0
+    if jump_break is not None:
+        for idx in range(1, len(y)):
+            if abs(float(y[idx]) - float(y[idx - 1])) > jump_break:
+                segments.append((x[start:idx], y[start:idx]))
+                start = idx
+    segments.append((x[start:], y[start:]))
+    return [(seg_x, seg_y) for seg_x, seg_y in segments if len(seg_x) > 0]
+
+
+def _caption_axis(ax, caption: str, y: float = -0.18) -> None:
+    ax.text(
+        0.5,
+        y,
+        caption,
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=PLOT_CAPTION_FONTSIZE,
+    )
+
+
+def _style_boundary_axis(ax, xlabel: str, ylabel: str) -> None:
+    ax.set_xlabel(xlabel, fontsize=PLOT_LABEL_FONTSIZE)
+    ax.set_ylabel(ylabel, fontsize=25)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_FONTSIZE)
+    ax.grid(True, linestyle="--", alpha=0.35)
+
+
+def _show_legend_if_any(ax) -> None:
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(handles, labels, fontsize=PLOT_LEGEND_FONTSIZE)
+
+
 def plot_boundary_curves(scan: dict, output_name: str = "fault_boundary_kappa_max.png") -> Path:
     te = scan["te"]
     strategies = [str(item) for item in scan["strategies"]]
     kappa_max = scan["kappa_max"]
 
     labels = {
-        S0: "S0 fixed timing",
-        S1: "S1 stage-1 adjustable",
-        S2: "S2 T4 adjustable",
-        S3: "S3 joint compensation",
+        S0: "S0: Fixed timing",
+        S1: "S1: Stage-1 adjustable",
+        S2: "S2: Stage-2 adjustable",
+        S3: "S3: Joint adjustment",
     }
 
-    fig, ax = plt.subplots(figsize=(9, 6))
+    fig, ax = plt.subplots(figsize=(7, 5))
     for idx, strategy in enumerate(strategies):
         y = kappa_max[idx]
-        ax.plot(te, y, marker="o", linewidth=2.2, label=labels.get(strategy, strategy))
-        ax.fill_between(te, 0.0, y, alpha=0.08)
+        jump_break = KAPPA_JUMP_BREAK if BREAK_LARGE_KAPPA_JUMPS else None
+        segments = _boundary_segments(te, y, jump_break=jump_break)
+        for seg_idx, (seg_te, seg_y) in enumerate(segments):
+            label = labels.get(strategy, strategy) if seg_idx == 0 else "_nolegend_"
+            ax.plot(
+                seg_te,
+                seg_y,
+                marker="o",
+                markersize=PLOT_MARKER_SIZE,
+                markeredgewidth=PLOT_MARKER_EDGE_WIDTH,
+                linewidth=2.2,
+                label=None,
+            )
+            ax.fill_between(seg_te, 0.0, seg_y, alpha=0.08)
 
-    ax.set_xlabel(r"Failure time $t_e$ (s)")
-    ax.set_ylabel(r"Maximum reachable fault ratio $\kappa_{\max}$")
-    ax.set_title(r"Reachable-domain boundary $\kappa_{\max}(t_e)$")
+    _style_boundary_axis(
+        ax,
+        r"Failure time $t_f$ (s)",
+        r"$\kappa_{\max}$",
+    )
+    """ _caption_axis(ax, r"Reachable-domain boundary under fixed timing") """
+
     ax.set_ylim(bottom=0.0)
-    ax.grid(True, linestyle="--", alpha=0.35)
-    ax.legend()
+    _show_legend_if_any(ax)
 
     out = FIGURES_DIR / output_name
-    fig.tight_layout()
-    fig.savefig(out, dpi=300, bbox_inches="tight")
+    fig.tight_layout(rect=[0, 0.08, 1, 0.98])
+    fig.savefig(out, dpi=300, bbox_inches="tight", pad_inches=0.02)
     print(f"Saved figure: {out}")
-    if SHOW_FIGURES:
-        plt.show()
-    else:
-        plt.close(fig)
-    return out
-
-
-def plot_boundary_compensation(scan: dict, output_name: str = "fault_boundary_compensation.png") -> Path:
-    te = scan["te"]
-    strategies = [str(item) for item in scan["strategies"]]
-    delta_T1 = scan["delta_T1"]
-    delta_T4 = scan["delta_T4"]
-
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    for idx, strategy in enumerate(strategies):
-        label = strategy
-        if strategy in {S1, S3}:
-            axes[0].plot(te, delta_T1[idx], marker="o", linewidth=2.0, label=label)
-        if strategy in {S2, S3}:
-            axes[1].plot(te, delta_T4[idx], marker="o", linewidth=2.0, label=label)
-
-    axes[0].set_title(r"Stage-1 compensation on boundary")
-    axes[0].set_xlabel(r"Failure time $t_e$ (s)")
-    axes[0].set_ylabel(r"$\Delta T_1$ (s)")
-    axes[0].grid(True, linestyle="--", alpha=0.35)
-    axes[0].legend()
-
-    axes[1].set_title(r"Second-stage compensation on boundary")
-    axes[1].set_xlabel(r"Failure time $t_e$ (s)")
-    axes[1].set_ylabel(r"$\Delta T_4$ (s)")
-    axes[1].grid(True, linestyle="--", alpha=0.35)
-    axes[1].legend()
-
-    out = FIGURES_DIR / output_name
-    fig.tight_layout()
-    fig.savefig(out, dpi=300, bbox_inches="tight")
-    print(f"Saved figure: {out}")
-    if SHOW_FIGURES:
-        plt.show()
-    else:
+    if not SHOW_FIGURES:
         plt.close(fig)
     return out
 
@@ -439,12 +655,12 @@ def main() -> None:
     cfg = build_config()
     if RUN_SCAN:
         scan = scan_boundary_curves(cfg)
-        save_boundary_npz(RESULT_FILE, scan)
     else:
-        scan = load_boundary_npz(RESULT_FILE)
+        scan = load_selected_strategy_scans(cfg)
 
-    plot_boundary_curves(scan)
-    plot_boundary_compensation(scan)
+    plot_boundary_curves(scan, output_name=f"{cfg.result_file.stem}_kappa_max.png")
+    if SHOW_FIGURES:
+        plt.show()
 
 
 if __name__ == "__main__":
