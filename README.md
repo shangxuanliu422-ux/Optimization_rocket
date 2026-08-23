@@ -126,3 +126,19 @@ err_f = env.wrap_angle_deg(f_fin - f_t)
 加入了4种策略对比的pro文件，有弯矩、攻角的限制可调，策略可选
 boundary是用二分法一个一个查找可达域的代码，与pro对齐
 visual加入了攻角、速度倾角、弯矩的对比图
+
+
+0823总结
+
+[fault_reachability_core.py]当前可达域核心：统一定义 S0–S3、构造故障后 NLP、输出可达性、一级补偿、T4 补偿、剩余推进剂和末端质量。
+[run_fault_boundary_maps.py]对每个故障时刻用可行性二分搜索 \(\kappa_{\max}\)，得到可达域边界。
+[run_fault_strategy_maps.py]扫描 \((t_e,\kappa)\) 网格，统计不同策略的可达性及补偿量，支持断点续算和多进程。
+[run_fault_terminal_relaxation_maps.py]比较严格六根数、放松真近点角、工程容差三种任务定义下的可达边界。
+[fault_reachability_plots.py]绘制可达性、一级补偿、T4 补偿、S3 相对 S2 节省量等图。插值和平滑只用于显示，不修改原始统计。
+
+历史演化脚本：
+kedaxing.py：早期把 \(\kappa\) 直接放入 NLP 最大化，一级按推进剂耗尽时刻延长，T4 固定。
+new_kedaxing.py：去掉平滑项，只最小化 \(-\kappa\)，避免平滑目标污染“硬边界”。
+kedaxing_guding.py：固定一级时序的早期边界版本。
+relitu.py：早期扫描 \((t_e,\kappa)\)，统计最小 T4 及 \(\Delta T_4\) 热力图。
+当前应重点讲 fault_opt_pro + fault_reachability_core + 三个 run_* 脚本，其他脚本作为研究演化过程。
