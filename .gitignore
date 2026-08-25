@@ -36,3 +36,12 @@ Thumbs.db
 # Local environment files
 .env
 .env.*
+
+# Legacy experiment entry points
+# Kept locally for research traceability, but no longer published on the main branch.
+/fault_opt.py
+/fault_opt_T4.py
+/kedaxing.py
+/kedaxing_guding.py
+/new_kedaxing.py
+/relitu.py
